@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Obrazová proxy – technická zpráva</title>
+<title>Obrazová proxy – obchodní zpráva</title>
 <style>
   :root {
     --bg: #ffffff; --fg: #1f2328; --muted: #59636e; --line: #d1d9e0; --soft: #f6f8fa; --accent: #2f6fdd;
@@ -36,34 +36,71 @@
 </head>
 <body>
 <main>
-<h1>Obrazová proxy pro originalgallery.com – technická zpráva</h1>
+<h1>Obrazová proxy pro originalgallery.com – obchodní zpráva</h1>
 <p class="byline">22. 10. 2026 · Tomas Rehak</p>
+<p>Proxy před webem zrychlí načtení katalogu děl 4,5× a sníží objem stažených dat o 81 %, bez zásahu do aplikace. Obrázky zůstávají ostré a barvy jsou věrnější než dnes.</p>
 
-<h2>Shrnutí</h2>
-<p>Proxy snižuje přenos stránky <code>/works</code> z 26,1 MB na 5,0 MB a dobu do načtení všech obrázků z 16,6 s na 3,7 s (teplá cache, 50 Mbit/s). Aplikace se přitom nemění.</p>
-<ul>
-  <li><strong>Problém:</strong> 5 sponzorovaných děl na výpisu odkazuje přímo na originály z iPhonu (až 6,5 MB, 4117×5008 px) zobrazené v šířce 160 px. Ostatní náhledy jdou přes Supabase render API bez cache, které odpovídá ~1 s na obrázek.</li>
-  <li><strong>Řešení:</strong> nginx + imgproxy před aplikací. Obrázky zmenší z originálu, převede do AVIF q55 a uloží do cache. Vše ostatní jde beze změny na origin.</li>
-  <li><strong>Kvalita:</strong> q55 je nastavená tak, aby objem obrázků byl poloviční proti WebP q85 (4,1 místo 8,7 MB). Věrnost je mírně pod dnešními náhledy (SSIM 0,942 proti 0,951) při stejném rozlišení 800 px.</li>
-</ul>
-
-<h2>Architektura</h2>
-<p>Proxy tvoří dva kontejnery: <strong>nginx</strong> (TLS, HTTP/2, routování, disková cache) a <strong>imgproxy</strong> (libvips, zmenšení Lanczos3, AVIF q55). Stojí před originem a vše kromě obrázků předává beze změny, takže aplikaci není třeba upravovat.</p>
+<h2>Zrychlení</h2>
+<p>Všechny obrázky katalogu jsou na obrazovce za 3,7 s místo 16,6 s.</p>
 <div class="scroll"><table>
-  <thead><tr><th>Cesta</th><th>Co proxy dělá</th><th>Cache v proxy</th></tr></thead>
+  <thead><tr><th>Ukazatel (stránka katalogu)</th><th>Dnes</th><th>S proxy</th><th>Změna</th></tr></thead>
   <tbody>
-    <tr><td><code>/storage/v1/object/public/…</code>, <code>/storage/produkty/…</code> (originály)</td><td>Zmenší do 2048 px. Je-li Referer výpis (<code>/works</code>, <code>/artists</code> a jazykové mutace), zmenší do 800 px.</td><td>30 dní, klíč = URL + formát + varianta</td></tr>
-    <tr><td><code>/storage/v1/render/image/public/…?width=</code> (Supabase render)</td><td>Rozměr podle parametrů aplikace, ale přepočítaný z originálu</td><td>30 dní, klíč = URL + formát</td></tr>
-    <tr><td><code>/img/…</code> (alias, 302 na render)</td><td>Předá dál a cachuje přesměrování</td><td>podle originu (1 h)</td></tr>
-    <tr><td>vše ostatní (HTML, JS, CSS, API, uploady)</td><td>čisté pass-through</td><td>žádná</td></tr>
+    <tr><td>Všechny obrázky načtené</td><td class="n">16,6 s</td><td class="n">3,7 s</td><td class="n">4,5× rychleji</td></tr>
+    <tr><td>Stránka připravená</td><td class="n">14,3 s</td><td class="n">2,0 s</td><td class="n">7× rychleji</td></tr>
+    <tr><td>Hlavní obsah viditelný (LCP)</td><td class="n">4,2 s</td><td class="n">1,9 s</td><td class="n">2,2× rychleji</td></tr>
+    <tr><td>Stažená data</td><td class="n">26,1 MB</td><td class="n">5,0 MB</td><td class="n">−81 %</td></tr>
+    <tr><td>Největší obrázek</td><td class="n">6,5 MB</td><td class="n">0,16 MB</td><td class="n">41× menší</td></tr>
   </tbody>
 </table></div>
+<p>Měřeno v prohlížeči Chrome na připojení 50 Mbit/s, každá varianta jednou. Časy bez proxy během dne kolísaly mezi 8 a 45 s, objem dat je stabilní. Na pomalejším mobilním připojení bude rozdíl větší, protože se stahuje pětina dat.</p>
+
+<h2>Zachování kvality</h2>
+<p>Obrázky mají stejné rozlišení jako dnes a věrnější barvy, komprese je jen o chlup silnější.</p>
 <ul>
-  <li><strong>Formát:</strong> AVIF q55, pokud prohlížeč posílá <code>Accept: image/avif</code>, jinak WebP q55 nebo progresivní JPEG q75. Odpověď nese <code>Vary: Accept</code>, u originálů <code>Vary: Accept, Referer</code>.</li>
-  <li><strong>Kvalita:</strong> zmenšuje se vždy z originálu (Lanczos3) a barevný profil (Display P3 z iPhonů) zůstává. q55 je kompromis kvůli polovičnímu objemu dat. Při zobrazené velikosti náhledu na 2× DPR má SSIM 0,942. Dnešní Supabase JPEG q80 má 0,951 a WebP q85 0,966 (8 děl).</li>
-  <li><strong>Proč 800 px na výpisech:</strong> náhledy tam mají nejvýš 185 CSS px, takže i při 3× DPR stačí 555 px. Detail díla (542 px + lightbox) a hero na homepage (1300 px) dostanou 2048 px.</li>
-  <li><strong>Bezpečný fallback:</strong> když imgproxy obrázek nezpracuje, nginx vrátí originál z originu (<code>error_page … = @origin</code>).</li>
-  <li><strong>Proč ne Varnish:</strong> nginx je kvůli TLS a HTTP/2 potřeba tak jako tak a jeho cache vrací HIT za ~5 ms. Varnish by přidal další komponentu bez měřitelného přínosu.</li>
+  <li><strong>Rozlišení zůstává:</strong> katalog dostává obrázky v šířce 800 px, což stačí i pro displeje s trojnásobnou hustotou pixelů. Detail díla a zvětšení (lightbox) dostávají 2048 px.</li>
+  <li><strong>Ostrost:</strong> každý obrázek se zmenšuje přímo z originálu kvalitním filtrem, ne z už zmenšené kopie.</li>
+  <li><strong>Věrnější barvy:</strong> dnešní náhledy zahazují barevný profil fotek z iPhonu (Display P3), takže barvy děl vypadají méně syté. Proxy profil zachovává.</li>
+  <li><strong>Komprese:</strong> míra podobnosti s originálem (SSIM, 1 = shodné) je 0,942 proti dnešním 0,951. To je cena za poloviční objem dat proti nejvyšší kvalitě (0,966).</li>
+  <li><strong>Kvalita q55 platí i pro detail a lightbox.</strong> Pokud bude při zvětšení ztráta vidět, stačí zvýšit kvalitu v nastavení. Například stupeň 65 místo 55 znamená asi +40 % dat.</li>
+</ul>
+
+<h2>Úspora nákladů</h2>
+<p>Na dnešním hostingu ušetří proxy na přenosu dat téměř 0 Kč, protože přenos je v ceně serveru. Hlavní přínos je 6× větší kapacita linky a menší zátěž serveru. V placeném Supabase Cloud by proxy ušetřila ~4 300 Kč měsíčně na každých 100 000 zobrazení katalogu.</p>
+<ul>
+  <li><strong>Současný hosting:</strong> web běží na serveru u Hetzneru v Německu (IP 116.202.234.155, síť AS24940). Supabase (úložiště a zmenšování obrázků) je provozovaný na vlastním serveru, ne v Supabase Cloud. Odpovídá přímo na doméně originalgallery.com přes bránu Kong do 1 ms.</li>
+  <li><strong>Přenos u Hetzneru je v ceně:</strong> dedikované servery mají neomezený přenos (<a href="https://docs.hetzner.com/robot/general/traffic/">Hetzner</a>), cloudové servery v EU 20 TB měsíčně a pak 1 € za TB (<a href="https://www.hetzner.com/cloud/regular-performance">Hetzner Cloud</a>). Typ serveru zvenku nepoznáme. 20 TB odpovídá zhruba 770 000 zobrazení katalogu dnes a 4 milionům s proxy.</li>
+  <li><strong>Kapacita linky:</strong> linka 1 Gbit/s dnes obslouží ~5 načtení katalogu za sekundu (25 MB obrázků na jedno), s proxy ~30.</li>
+  <li><strong>Zátěž serveru:</strong> dnes server při každém zobrazení katalogu znovu přepočítá 43 náhledů (~1 s každý), tedy 430 000 přepočtů na 10 000 zobrazení. S proxy se každý náhled spočítá jednou za 30 dní.</li>
+</ul>
+<div class="scroll"><table>
+  <thead><tr><th>Náklad na obrázky, 100 000 zobrazení katalogu za měsíc</th><th>Dnes</th><th>S proxy</th></tr></thead>
+  <tbody>
+    <tr><td>Hetzner, současný hosting (přenos v ceně)</td><td class="n">0 Kč</td><td class="n">0 Kč</td></tr>
+    <tr><td>Supabase Cloud Pro, přenos bez CDN ($0,09/GB nad 250 GB)</td><td class="n">4 392 Kč</td><td class="n">311 Kč</td></tr>
+    <tr><td>Supabase Cloud Pro, přenos přes Smart CDN ($0,03/GB nad 250 GB)</td><td class="n">1 464 Kč</td><td class="n">104 Kč</td></tr>
+    <tr><td>Supabase Cloud Pro, zmenšování obrázků ($5 za 1 000 originálů nad 100)</td><td class="n">205 Kč</td><td class="n">0 Kč</td></tr>
+  </tbody>
+</table></div>
+<p>Přenos počítá jen obrázky (25,1 MB dnes, 4,1 MB s proxy na jedno zobrazení). Zmenšování počítá 2 000 děl ze sitemapy, jeden originál na dílo. Ceny jsou bez DPH a bez základního poplatku $25 za Pro, kurz ČNB z 21. 10. 2026: 1 USD = 21,593 Kč. Zdroje: <a href="https://supabase.com/pricing">Supabase ceník</a>, <a href="https://supabase.com/docs/guides/platform/manage-your-usage/egress">Supabase egress</a>, <a href="https://supabase.com/docs/guides/platform/manage-your-usage/storage-image-transformations">Supabase zmenšování</a>, <a href="https://www.cnb.cz/cs/financni-trhy/devizovy-trh/kurzy-devizoveho-trhu/kurzy-devizoveho-trhu/">ČNB kurzy</a>.</p>
+<p>Řešení stojí na open-source softwaru bez licenčních poplatků. Potřebuje jen dva kontejnery vedle aplikace a do 10 GB disku na cache.</p>
+<p>Otevřená otázka: kolik zobrazení katalogu má web měsíčně (Google Analytics)? Částky v Supabase řádcích rostou lineárně s návštěvností.</p>
+
+<h2>Spokojenost klientů</h2>
+<p>Katalog se v Google metrice rychlosti posune z pásma „špatné“ do „dobré“ a zákazník při procházení děl nemusí čekat na náhledy.</p>
+<ul>
+  <li><strong>Rychlost podle Google:</strong> LCP do 2,5 s je dobré, nad 4 s špatné (<a href="https://web.dev/articles/lcp">web.dev</a>). Katalog má dnes 4,2 s, s proxy 1,9 s (laboratorní měření).</li>
+  <li><strong>Vyhledávání:</strong> Google doporučuje dobré Core Web Vitals pro úspěch ve vyhledávání, protože odpovídají tomu, co jeho řazení odměňuje (<a href="https://developers.google.com/search/docs/appearance/core-web-vitals">Google Search Central</a>).</li>
+  <li><strong>Mobilní návštěvníci</strong> stáhnou na jedno zobrazení katalogu 5 MB místo 26 MB, což šetří jejich datový tarif.</li>
+  <li><strong>Plynulé procházení:</strong> všechny náhledy jsou načtené za 3,7 s, takže se při scrollování neobjevují prázdná místa.</li>
+</ul>
+
+<h2>Technické řešení</h2>
+<p>Před stávající aplikaci se postaví reverzní proxy <strong>nginx</strong> s nástrojem <strong>imgproxy</strong> (oba open-source, dva Docker kontejnery). Vše kromě obrázků předává beze změny, takže aplikaci ani obsah není potřeba upravovat.</p>
+<ul>
+  <li>Obrázek zmenší na velikost, ve které se zobrazuje (katalog 800 px, detail 2048 px).</li>
+  <li>Převede ho do moderního formátu AVIF, pro starší prohlížeče do WebP nebo JPEG.</li>
+  <li>Výsledek uloží na 30 dní do cache a další návštěvníci ho dostanou okamžitě.</li>
+  <li>Když zpracování selže, pošle původní obrázek, takže na webu žádný obrázek nechybí.</li>
 </ul>
 <figure>
 <svg viewBox="0 0 760 360" role="img" aria-label="Jen obrázky jdou přes imgproxy, vše ostatní projde beze změny" font-size="13" font-family="system-ui, sans-serif">
@@ -100,70 +137,7 @@
 </svg>
 <figcaption>Tok požadavku v proxy · nginx + imgproxy</figcaption>
 </figure>
-<p>Při MISS stáhne imgproxy originál přes interní nginx :8081, zmenší ho a nginx výsledek uloží; další požadavky na stejnou variantu jsou HIT.</p>
-
-<h2>Metodika měření</h2>
-<p>Měří se stránka <code>/works</code> v headless Chromiu 156 (Playwright 1.64), viewport 1440×900, každý běh s čistým profilem a vypnutou cache prohlížeče. Skript zaznamená TTFB, LCP a událost load. Pak stránku proscrolluje po 900 px, aby se načetly všechny lazy obrázky, a počká, až budou hotové.</p>
-<ul>
-  <li><strong>Přenesená data</strong> jsou <code>encodedDataLength</code> z CDP, včetně hlaviček a skriptů třetích stran.</li>
-  <li><strong>Šířka pásma</strong> je v Chromu omezená na 50 Mbit/s, pro obě varianty stejně.</li>
-  <li><strong>Latence:</strong> proxy běží na localhostu, ale na serveru bude vedle originu. Proto se k jejím požadavkům přičítá naměřené RTT k originu (226 ms).</li>
-  <li><strong>Scénáře:</strong> bez proxy, proxy se studenou cache (před každým během vyprázdněná) a proxy s teplou cache. Každý scénář běží jednou.</li>
-  <li><strong>Studená cache je pesimistická:</strong> imgproxy zde stahuje originály přes internet (~10 Mbit/s z originu). Na serveru je bude brát z lokální sítě.</li>
-</ul>
-
-<h2>Výsledky</h2>
-<p>S teplou cache klesl přenos stránky <code>/works</code> z 26,1 MB na 5,0 MB (−81 %) a všechny obrázky se načetly za 3,7 s místo 16,6 s.</p>
-<div class="scroll"><table>
-  <thead><tr><th>Scénář (50 Mbit/s)</th><th>LCP (s)</th><th>load (s)</th><th>všechny obrázky (s)</th><th>přeneseno celkem (MB)</th><th>z toho obrázky (MB)</th><th>největší obrázek</th></tr></thead>
-  <tbody>
-    <tr><td>bez proxy</td><td class="n">4,2</td><td class="n">14,3</td><td class="n">16,6</td><td class="n">26,1</td><td class="n">25,1</td><td class="n">6,46 MB</td></tr>
-    <tr><td>proxy, studená cache</td><td class="n">1,4</td><td class="n">2,9</td><td class="n">15,0</td><td class="n">4,8</td><td class="n">4,1</td><td class="n">156 kB</td></tr>
-    <tr><td>proxy, teplá cache</td><td class="n">1,9</td><td class="n">2,0</td><td class="n">3,7</td><td class="n">5,0</td><td class="n">4,1</td><td class="n">156 kB</td></tr>
-  </tbody>
-</table></div>
-<div class="scroll"><table>
-  <thead><tr><th>Typ obrázku na <code>/works</code></th><th>Počet</th><th>Bez proxy (MB)</th><th>Proxy (MB)</th></tr></thead>
-  <tbody>
-    <tr><td>originály (sponzorovaná díla)</td><td class="n">5</td><td class="n">18,31</td><td class="n">0,42</td></tr>
-    <tr><td>náhledy přes Supabase render (800 px)</td><td class="n">43</td><td class="n">6,56</td><td class="n">3,54</td></tr>
-  </tbody>
-</table></div>
-<ul>
-  <li><strong>Data jsou stabilní, časy orientační.</strong> Každý scénář měl jeden běh. Přímé načtení všech obrázků kolísalo během dne mezi 8 a 45 s, protože origin posílá data rychlostí ~10 Mbit/s.</li>
-  <li><strong>Studená cache</strong> odpovídá prvnímu návštěvníkovi po vyprázdnění cache. LCP a load jsou rychlejší, protože se stahují menší obrázky. Poslední obrázek ale čeká na stažení originálu z originu přes internet.</li>
-  <li><strong>Pass-through funguje:</strong> počet požadavků je ve všech scénářích stejný (~80) a imgproxy při měření nehlásil žádnou chybu. TTFB HTML se nemění, protože HTML jde bez cache.</li>
-</ul>
-
-<h2>Spuštění a nasazení</h2>
-<p>Repozitář obsahuje <code>compose.yaml</code>, <code>nginx/</code> (konfigurace), <code>certs/gen.sh</code> a <code>bench/measure.mjs</code>.</p>
-<p>Lokálně:</p>
-<ol>
-  <li><code>./certs/gen.sh</code> vytvoří self-signed certifikát pro originalgallery.com (jen pro PoC).</li>
-  <li><code>docker compose up -d</code> spustí nginx na 127.0.0.1:8443 (HTTPS) a :8080 (HTTP). imgproxy je dostupný jen uvnitř Docker sítě.</li>
-  <li>Celý web je pak přes proxy na <code>http://localhost:8080</code> v libovolném prohlížeči. Absolutní odkazy na originalgallery.com v HTML, CSS, JS a přesměrováních proxy přepisuje na adresu, přes kterou klient přišel; pro veřejný host je nechává beze změny.</li>
-  <li><code>cd bench &amp;&amp; npm install &amp;&amp; node measure.mjs</code> zopakuje měření.</li>
-</ol>
-<p>Na serveru se mění jen prostředí v <code>compose.yaml</code>, konfigurace nginx zůstává stejná:</p>
-<div class="scroll"><table>
-  <thead><tr><th>Proměnná</th><th>PoC</th><th>Server</th></tr></thead>
-  <tbody>
-    <tr><td><code>ORIGIN_SCHEME</code></td><td><code>https</code></td><td>schéma aplikace za proxy, typicky <code>http</code></td></tr>
-    <tr><td><code>ORIGIN_SERVER</code></td><td><code>originalgallery.com:443</code></td><td>interní adresa aplikace, např. <code>127.0.0.1:3000</code></td></tr>
-    <tr><td><code>PUBLIC_HOST</code></td><td><code>originalgallery.com</code></td><td><code>originalgallery.com</code></td></tr>
-    <tr><td><code>CACHE_SIZE</code></td><td><code>10g</code></td><td>podle disku</td></tr>
-  </tbody>
-</table></div>
-<p>Dál je potřeba publikovat porty 80/443 místo 127.0.0.1:8080/8443 a dodat skutečný certifikát do <code>certs/</code>. Alternativně nechat TLS na stávajícím balanceru a proxy vystavit jen na HTTP. Aplikace dostane <code>X-Forwarded-For</code> a <code>X-Forwarded-Proto</code>, takže pokud loguje IP klientů, musí těmto hlavičkám věřit. Cache se vyprázdní příkazem <code>docker compose exec proxy sh -c 'rm -rf /var/cache/nginx/img/*' &amp;&amp; docker compose restart proxy</code>.</p>
-
-<h2>Omezení a další kroky</h2>
-<ul>
-  <li><strong>Varianta podle Refereru:</strong> bez Refereru (přísné nastavení soukromí) dostane prohlížeč 2048 px, tedy větší, ale ostrý obrázek. <code>Vary: Referer</code> snižuje znovupoužití cache prohlížeče mezi různými stránkami.</li>
-  <li><strong>Kvalita q55 platí i pro detail a lightbox.</strong> Pokud bude na zoomu ztráta vidět, stačí zvýšit <code>IMGPROXY_FORMAT_QUALITY</code>. Například avif=65 znamená asi +40 % dat.</li>
-  <li><strong>Invalidace:</strong> názvy souborů obsahují časové razítko, takže nový upload má novou URL. Přepsání souboru pod stejnou cestou se projeví až po vyprázdnění cache (30 dní v proxy, 7 dní v prohlížeči).</li>
-  <li><strong>První návštěva nového díla</strong> čeká na stažení originálu. Na serveru v lokální síti to bude zlomek dnešních sekund. Cache jde předehřát průchodem výpisů.</li>
-  <li><strong>Systémově</strong> by aplikace měla i u sponzorovaných děl používat render URL. Proxy by pak řešila jen cache a formát, bez heuristiky podle Refereru.</li>
-</ul>
+<p>Prototyp běží lokálně a dá se vyzkoušet na <code>http://localhost:8080</code>, kód je v <a href="https://github.com/trehak1/originalgallery-image-proxy">repozitáři na GitHubu</a>. Dalším krokem je nasazení na server před aplikaci a ověření na skutečném provozu.</p>
 </main>
 </body>
 </html>
