@@ -6,7 +6,7 @@ Pass-through proxy for originalgallery.com that resizes, converts (AVIF/WebP) an
 - **imgproxy** resizes from the original (800 px on listings, 2048 px elsewhere) and encodes AVIF q55, falling back to WebP or JPEG.
 - If imgproxy fails, the original image is served.
 
-On the `/works` page, data per view drops from 26.1 MB to 5.0 MB. The details are in [report.html](report.html) (in Czech).
+On the `/works` page, data per view drops from 26.1 MB to 5.0 MB. The details are in the [technical report](https://trehak1.github.io/originalgallery-image-proxy/report.html) (in Czech).
 
 ## Run locally
 
