@@ -1,0 +1,125 @@
+# Pass-through proxy in front of ${PUBLIC_HOST}. Everything goes to the origin
+# unchanged; only image URLs are resized/recompressed by imgproxy and cached.
+# Under any other host (e.g. http://localhost:8080) absolute links to the public
+# host are rewritten to that host, so the whole site is browsable through it.
+
+proxy_cache_path /var/cache/nginx/img levels=1:2 keys_zone=img:50m
+                 max_size=${CACHE_SIZE} inactive=30d use_temp_path=off;
+
+log_format proxy '$remote_addr "$request" $status $body_bytes_sent '
+                 'cache=$upstream_cache_status rt=$request_time urt=$upstream_response_time';
+
+upstream origin {
+    server ${ORIGIN_SERVER};
+    keepalive 32;
+}
+
+upstream imgproxy {
+    server imgproxy:8080;
+    keepalive 32;
+}
+
+# AVIF or WebP for browsers that accept it, otherwise the source format.
+map $http_accept $img_ext {
+    default        "";
+    "~image/avif"  "@avif";
+    "~image/webp"  "@webp";
+}
+
+# Originals on listing pages (shown at <= 185 CSS px) get 800 px, crisp at 3x DPR.
+# Everything else (detail, lightbox, homepage hero) gets 2048 px.
+map $http_referer $orig_size {
+    default 2048;
+    "~^https?://[^/]+/(?:[a-z]{2}/)?(?:works|dila|diela|werke|prace|oeuvres|opere|obras|raboty|alkotasok|artists|autori|kuenstler|artysci|artistes|artisti|artistas|hudozhniki|muveszek)/?(?:[?#]|$)" 800;
+}
+
+# Base URL for absolute links in responses: unchanged for the public host.
+map $http_host $self_url {
+    ${PUBLIC_HOST}  https://${PUBLIC_HOST};
+    default         $scheme://$http_host;
+}
+
+# Supabase render API params -> imgproxy resize (Supabase default is cover).
+map $arg_resize $rs_type { contain fit; fill force; default fill; }
+map $arg_width  $rs_w    { "~^\d+$" $arg_width;  default 0; }
+map $arg_height $rs_h    { "~^\d+$" $arg_height; default 0; }
+
+proxy_http_version 1.1;
+proxy_ssl_server_name on;
+
+gzip on;
+gzip_proxied any;
+gzip_types text/css text/javascript application/javascript application/json image/svg+xml;
+
+server {
+    listen 80;
+    listen 443 ssl;
+    http2 on;
+    server_name _;
+    access_log /var/log/nginx/access.log proxy;
+
+    ssl_certificate     /etc/nginx/certs/tls.crt;
+    ssl_certificate_key /etc/nginx/certs/tls.key;
+
+    client_max_body_size 0;
+    proxy_request_buffering off;
+
+    proxy_set_header Host ${PUBLIC_HOST};
+    proxy_set_header Connection "";
+    proxy_set_header Accept-Encoding "";
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_ssl_name ${PUBLIC_HOST};
+
+    proxy_redirect https://${PUBLIC_HOST}/ $self_url/;
+    sub_filter https://${PUBLIC_HOST} $self_url;
+    sub_filter_once off;
+    sub_filter_types text/css text/javascript application/javascript application/json;
+
+    # Originals (multi-MB camera JPEGs used as thumbnails).
+    location ~* ^/storage/(?<src>(?:v1/object/public|produkty)/.+\.(?:jpe?g|png|webp))$ {
+        proxy_pass http://imgproxy/insecure/rs:fit:$orig_size:$orig_size/plain/http://proxy:8081/storage/$src$img_ext;
+        proxy_cache_key $request_uri$img_ext$orig_size;
+        add_header Vary "Accept, Referer" always;
+        include /etc/nginx/img-cache.conf;
+    }
+
+    # Supabase render API: same size as requested, resized from the original.
+    location ~* ^/storage/v1/render/image/public/(?<src>.+\.(?:jpe?g|png|webp))$ {
+        proxy_pass http://imgproxy/insecure/rs:$rs_type:$rs_w:$rs_h/plain/http://proxy:8081/storage/v1/object/public/$src$img_ext;
+        proxy_cache_key $request_uri$img_ext;
+        add_header Vary Accept always;
+        include /etc/nginx/img-cache.conf;
+    }
+
+    # Thumbnail aliases (302 to the render API): cache per origin Cache-Control.
+    location /img/ {
+        proxy_pass ${ORIGIN_SCHEME}://origin;
+        proxy_cache img;
+        proxy_cache_key $request_uri;
+        proxy_ignore_headers Set-Cookie;
+        proxy_hide_header Set-Cookie;
+        add_header X-Cache $upstream_cache_status always;
+    }
+
+    location / {
+        proxy_pass ${ORIGIN_SCHEME}://origin;
+    }
+
+    # Fallback when imgproxy cannot process an image: serve it as the origin does.
+    location @origin {
+        proxy_pass ${ORIGIN_SCHEME}://origin;
+    }
+}
+
+# Internal: imgproxy fetches source images from the origin through here.
+server {
+    listen 8081;
+
+    location / {
+        proxy_pass ${ORIGIN_SCHEME}://origin;
+        proxy_set_header Host ${PUBLIC_HOST};
+        proxy_set_header Connection "";
+        proxy_ssl_name ${PUBLIC_HOST};
+    }
+}

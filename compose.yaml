@@ -1,0 +1,34 @@
+services:
+  proxy:
+    image: nginx:1.29-alpine
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8080:80"
+      - "127.0.0.1:8443:443"
+    environment:
+      ORIGIN_SCHEME: https
+      ORIGIN_SERVER: originalgallery.com:443
+      PUBLIC_HOST: originalgallery.com
+      CACHE_SIZE: 10g
+    volumes:
+      - ./nginx/default.conf.template:/etc/nginx/templates/default.conf.template:ro
+      - ./nginx/img-cache.conf:/etc/nginx/img-cache.conf:ro
+      - ./certs:/etc/nginx/certs:ro
+      - img-cache:/var/cache/nginx/img
+    depends_on:
+      - imgproxy
+
+  imgproxy:
+    image: ghcr.io/imgproxy/imgproxy:v4.0.19
+    restart: unless-stopped
+    environment:
+      IMGPROXY_FORMAT_QUALITY: avif=55,webp=55,jpeg=75
+      IMGPROXY_JPEG_PROGRESSIVE: "true"
+      IMGPROXY_STRIP_COLOR_PROFILE: "false"
+      IMGPROXY_MAX_SRC_RESOLUTION: "100"
+      IMGPROXY_TIMEOUT: "60"
+      IMGPROXY_DOWNLOAD_TIMEOUT: "60"
+      IMGPROXY_TTL: "604800"
+
+volumes:
+  img-cache:

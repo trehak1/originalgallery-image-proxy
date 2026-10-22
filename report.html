@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="cs">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Obrazová proxy – technická zpráva</title>
+<style>
+  :root {
+    --bg: #ffffff; --fg: #1f2328; --muted: #59636e; --line: #d1d9e0; --soft: #f6f8fa; --accent: #2f6fdd;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #0d1117; --fg: #e6edf3; --muted: #9198a1; --line: #3d444d; --soft: #151b23; --accent: #5b9bff; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 16px/1.55 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { max-width: 860px; margin: 0 auto; padding: 32px 16px 64px; }
+  h1 { font-size: 1.75rem; line-height: 1.25; margin: 0 0 4px; }
+  h2 { font-size: 1.3rem; margin: 2.2em 0 .6em; padding-bottom: .3em; border-bottom: 1px solid var(--line); }
+  .byline { color: var(--muted); margin: 0 0 1.5em; }
+  code { font: .875em ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--soft); padding: .1em .35em; border-radius: 4px; overflow-wrap: anywhere; }
+  .scroll { overflow-x: auto; margin: 1em 0; }
+  table { border-collapse: collapse; width: 100%; font-size: .95rem; }
+  th, td { border: 1px solid var(--line); padding: 6px 10px; text-align: left; vertical-align: top; }
+  th { background: var(--soft); font-weight: 600; }
+  td.n { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  li { margin: .35em 0; }
+  figure { margin: 1.5em 0; }
+  figure svg { width: 100%; height: auto; display: block; }
+  figcaption { color: var(--muted); font-size: .875rem; margin-top: 6px; }
+  svg .edge { fill: none; stroke: var(--muted); stroke-width: 1.25; }
+  svg .arrow { fill: var(--muted); }
+  svg .ink { fill: var(--fg); }
+  svg .quiet { fill: var(--muted); }
+  svg .hl { fill: var(--accent); fill-opacity: .12; stroke: var(--accent); stroke-width: 2; }
+</style>
+</head>
+<body>
+<main>
+<h1>Obrazová proxy pro originalgallery.com – technická zpráva</h1>
+<p class="byline">22. 10. 2026 · Tomas Rehak</p>
+
+<h2>Shrnutí</h2>
+<p>Proxy snižuje přenos stránky <code>/works</code> z 26,1 MB na 5,0 MB a dobu do načtení všech obrázků z 16,6 s na 3,7 s (teplá cache, 50 Mbit/s). Aplikace se přitom nemění.</p>
+<ul>
+  <li><strong>Problém:</strong> 5 sponzorovaných děl na výpisu odkazuje přímo na originály z iPhonu (až 6,5 MB, 4117×5008 px) zobrazené v šířce 160 px. Ostatní náhledy jdou přes Supabase render API bez cache, které odpovídá ~1 s na obrázek.</li>
+  <li><strong>Řešení:</strong> nginx + imgproxy před aplikací. Obrázky zmenší z originálu, převede do AVIF q55 a uloží do cache. Vše ostatní jde beze změny na origin.</li>
+  <li><strong>Kvalita:</strong> q55 je nastavená tak, aby objem obrázků byl poloviční proti WebP q85 (4,1 místo 8,7 MB). Věrnost je mírně pod dnešními náhledy (SSIM 0,942 proti 0,951) při stejném rozlišení 800 px.</li>
+</ul>
+
+<h2>Architektura</h2>
+<p>Proxy tvoří dva kontejnery: <strong>nginx</strong> (TLS, HTTP/2, routování, disková cache) a <strong>imgproxy</strong> (libvips, zmenšení Lanczos3, AVIF q55). Stojí před originem a vše kromě obrázků předává beze změny, takže aplikaci není třeba upravovat.</p>
+<div class="scroll"><table>
+  <thead><tr><th>Cesta</th><th>Co proxy dělá</th><th>Cache v proxy</th></tr></thead>
+  <tbody>
+    <tr><td><code>/storage/v1/object/public/…</code>, <code>/storage/produkty/…</code> (originály)</td><td>Zmenší do 2048 px. Je-li Referer výpis (<code>/works</code>, <code>/artists</code> a jazykové mutace), zmenší do 800 px.</td><td>30 dní, klíč = URL + formát + varianta</td></tr>
+    <tr><td><code>/storage/v1/render/image/public/…?width=</code> (Supabase render)</td><td>Rozměr podle parametrů aplikace, ale přepočítaný z originálu</td><td>30 dní, klíč = URL + formát</td></tr>
+    <tr><td><code>/img/…</code> (alias, 302 na render)</td><td>Předá dál a cachuje přesměrování</td><td>podle originu (1 h)</td></tr>
+    <tr><td>vše ostatní (HTML, JS, CSS, API, uploady)</td><td>čisté pass-through</td><td>žádná</td></tr>
+  </tbody>
+</table></div>
+<ul>
+  <li><strong>Formát:</strong> AVIF q55, pokud prohlížeč posílá <code>Accept: image/avif</code>, jinak WebP q55 nebo progresivní JPEG q75. Odpověď nese <code>Vary: Accept</code>, u originálů <code>Vary: Accept, Referer</code>.</li>
+  <li><strong>Kvalita:</strong> zmenšuje se vždy z originálu (Lanczos3) a barevný profil (Display P3 z iPhonů) zůstává. q55 je kompromis kvůli polovičnímu objemu dat. Při zobrazené velikosti náhledu na 2× DPR má SSIM 0,942. Dnešní Supabase JPEG q80 má 0,951 a WebP q85 0,966 (8 děl).</li>
+  <li><strong>Proč 800 px na výpisech:</strong> náhledy tam mají nejvýš 185 CSS px, takže i při 3× DPR stačí 555 px. Detail díla (542 px + lightbox) a hero na homepage (1300 px) dostanou 2048 px.</li>
+  <li><strong>Bezpečný fallback:</strong> když imgproxy obrázek nezpracuje, nginx vrátí originál z originu (<code>error_page … = @origin</code>).</li>
+  <li><strong>Proč ne Varnish:</strong> nginx je kvůli TLS a HTTP/2 potřeba tak jako tak a jeho cache vrací HIT za ~5 ms. Varnish by přidal další komponentu bez měřitelného přínosu.</li>
+</ul>
+<figure>
+<svg viewBox="0 0 760 360" role="img" aria-label="Jen obrázky jdou přes imgproxy, vše ostatní projde beze změny" font-size="13" font-family="system-ui, sans-serif">
+  <defs><marker id="flow-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path class="arrow" d="M0 0L10 5L0 10z"/></marker></defs>
+  <text class="ink" x="24" y="34" font-size="15" font-weight="600">Jen obrázky jdou přes imgproxy, vše ostatní projde beze změny</text>
+  <g class="edge">
+    <path d="M144 198H196" marker-start="url(#flow-arrow)" marker-end="url(#flow-arrow)"/>
+    <path d="M372 150H416" marker-end="url(#flow-arrow)"/>
+    <path d="M491 178V202" marker-end="url(#flow-arrow)"/>
+    <path d="M566 230H606" marker-end="url(#flow-arrow)"/>
+    <path d="M372 310H606" marker-end="url(#flow-arrow)"/>
+  </g>
+  <rect class="edge" x="24" y="170" width="120" height="56" rx="8"/>
+  <text class="ink" x="84" y="202" text-anchor="middle" font-weight="600">Prohlížeč</text>
+  <rect class="edge" x="196" y="64" width="176" height="272" rx="8"/>
+  <text class="ink" x="284" y="92" text-anchor="middle" font-weight="600">nginx :443</text>
+  <text class="quiet" x="284" y="114" text-anchor="middle" font-size="11.5">TLS, HTTP/2, routování</text>
+  <text class="quiet" x="284" y="130" text-anchor="middle" font-size="11.5">cache obrázků 30 dní</text>
+  <text class="quiet" x="284" y="146" text-anchor="middle" font-size="11.5">HIT: odpověď za ~5 ms</text>
+  <rect class="hl" x="416" y="122" width="150" height="56" rx="8"/>
+  <text class="ink" x="491" y="146" text-anchor="middle" font-weight="600">imgproxy</text>
+  <text class="ink" x="491" y="164" text-anchor="middle" font-size="11.5">Lanczos3, AVIF q55</text>
+  <rect class="edge" x="416" y="202" width="150" height="56" rx="8"/>
+  <text class="ink" x="491" y="226" text-anchor="middle" font-weight="600">nginx :8081</text>
+  <text class="quiet" x="491" y="244" text-anchor="middle" font-size="11.5">interní, jen zdroj</text>
+  <rect class="edge" x="606" y="202" width="130" height="134" rx="8"/>
+  <text class="ink" x="671" y="258" text-anchor="middle" font-weight="600">Origin</text>
+  <text class="quiet" x="671" y="278" text-anchor="middle" font-size="11.5">aplikace a</text>
+  <text class="quiet" x="671" y="294" text-anchor="middle" font-size="11.5">Supabase storage</text>
+  <text class="quiet" x="170" y="188" text-anchor="middle" font-size="11.5">HTTPS</text>
+  <text class="quiet" x="394" y="140" text-anchor="middle" font-size="11.5">MISS</text>
+  <text class="quiet" x="500" y="194" font-size="11.5">originál</text>
+  <text class="quiet" x="489" y="300" text-anchor="middle" font-size="11.5">HTML, JS, API: beze změny</text>
+</svg>
+<figcaption>Tok požadavku v proxy · nginx + imgproxy</figcaption>
+</figure>
+<p>Při MISS stáhne imgproxy originál přes interní nginx :8081, zmenší ho a nginx výsledek uloží; další požadavky na stejnou variantu jsou HIT.</p>
+
+<h2>Metodika měření</h2>
+<p>Měří se stránka <code>/works</code> v headless Chromiu 156 (Playwright 1.64), viewport 1440×900, každý běh s čistým profilem a vypnutou cache prohlížeče. Skript zaznamená TTFB, LCP a událost load. Pak stránku proscrolluje po 900 px, aby se načetly všechny lazy obrázky, a počká, až budou hotové.</p>
+<ul>
+  <li><strong>Přenesená data</strong> jsou <code>encodedDataLength</code> z CDP, včetně hlaviček a skriptů třetích stran.</li>
+  <li><strong>Šířka pásma</strong> je v Chromu omezená na 50 Mbit/s, pro obě varianty stejně.</li>
+  <li><strong>Latence:</strong> proxy běží na localhostu, ale na serveru bude vedle originu. Proto se k jejím požadavkům přičítá naměřené RTT k originu (226 ms).</li>
+  <li><strong>Scénáře:</strong> bez proxy, proxy se studenou cache (před každým během vyprázdněná) a proxy s teplou cache. Každý scénář běží jednou.</li>
+  <li><strong>Studená cache je pesimistická:</strong> imgproxy zde stahuje originály přes internet (~10 Mbit/s z originu). Na serveru je bude brát z lokální sítě.</li>
+</ul>
+
+<h2>Výsledky</h2>
+<p>S teplou cache klesl přenos stránky <code>/works</code> z 26,1 MB na 5,0 MB (−81 %) a všechny obrázky se načetly za 3,7 s místo 16,6 s.</p>
+<div class="scroll"><table>
+  <thead><tr><th>Scénář (50 Mbit/s)</th><th>LCP (s)</th><th>load (s)</th><th>všechny obrázky (s)</th><th>přeneseno celkem (MB)</th><th>z toho obrázky (MB)</th><th>největší obrázek</th></tr></thead>
+  <tbody>
+    <tr><td>bez proxy</td><td class="n">4,2</td><td class="n">14,3</td><td class="n">16,6</td><td class="n">26,1</td><td class="n">25,1</td><td class="n">6,46 MB</td></tr>
+    <tr><td>proxy, studená cache</td><td class="n">1,4</td><td class="n">2,9</td><td class="n">15,0</td><td class="n">4,8</td><td class="n">4,1</td><td class="n">156 kB</td></tr>
+    <tr><td>proxy, teplá cache</td><td class="n">1,9</td><td class="n">2,0</td><td class="n">3,7</td><td class="n">5,0</td><td class="n">4,1</td><td class="n">156 kB</td></tr>
+  </tbody>
+</table></div>
+<div class="scroll"><table>
+  <thead><tr><th>Typ obrázku na <code>/works</code></th><th>Počet</th><th>Bez proxy (MB)</th><th>Proxy (MB)</th></tr></thead>
+  <tbody>
+    <tr><td>originály (sponzorovaná díla)</td><td class="n">5</td><td class="n">18,31</td><td class="n">0,42</td></tr>
+    <tr><td>náhledy přes Supabase render (800 px)</td><td class="n">43</td><td class="n">6,56</td><td class="n">3,54</td></tr>
+  </tbody>
+</table></div>
+<ul>
+  <li><strong>Data jsou stabilní, časy orientační.</strong> Každý scénář měl jeden běh. Přímé načtení všech obrázků kolísalo během dne mezi 8 a 45 s, protože origin posílá data rychlostí ~10 Mbit/s.</li>
+  <li><strong>Studená cache</strong> odpovídá prvnímu návštěvníkovi po vyprázdnění cache. LCP a load jsou rychlejší, protože se stahují menší obrázky. Poslední obrázek ale čeká na stažení originálu z originu přes internet.</li>
+  <li><strong>Pass-through funguje:</strong> počet požadavků je ve všech scénářích stejný (~80) a imgproxy při měření nehlásil žádnou chybu. TTFB HTML se nemění, protože HTML jde bez cache.</li>
+</ul>
+
+<h2>Spuštění a nasazení</h2>
+<p>Repozitář obsahuje <code>compose.yaml</code>, <code>nginx/</code> (konfigurace), <code>certs/gen.sh</code> a <code>bench/measure.mjs</code>.</p>
+<p>Lokálně:</p>
+<ol>
+  <li><code>./certs/gen.sh</code> vytvoří self-signed certifikát pro originalgallery.com (jen pro PoC).</li>
+  <li><code>docker compose up -d</code> spustí nginx na 127.0.0.1:8443 (HTTPS) a :8080 (HTTP). imgproxy je dostupný jen uvnitř Docker sítě.</li>
+  <li>Celý web je pak přes proxy na <code>http://localhost:8080</code> v libovolném prohlížeči. Absolutní odkazy na originalgallery.com v HTML, CSS, JS a přesměrováních proxy přepisuje na adresu, přes kterou klient přišel; pro veřejný host je nechává beze změny.</li>
+  <li><code>cd bench &amp;&amp; npm install &amp;&amp; node measure.mjs</code> zopakuje měření.</li>
+</ol>
+<p>Na serveru se mění jen prostředí v <code>compose.yaml</code>, konfigurace nginx zůstává stejná:</p>
+<div class="scroll"><table>
+  <thead><tr><th>Proměnná</th><th>PoC</th><th>Server</th></tr></thead>
+  <tbody>
+    <tr><td><code>ORIGIN_SCHEME</code></td><td><code>https</code></td><td>schéma aplikace za proxy, typicky <code>http</code></td></tr>
+    <tr><td><code>ORIGIN_SERVER</code></td><td><code>originalgallery.com:443</code></td><td>interní adresa aplikace, např. <code>127.0.0.1:3000</code></td></tr>
+    <tr><td><code>PUBLIC_HOST</code></td><td><code>originalgallery.com</code></td><td><code>originalgallery.com</code></td></tr>
+    <tr><td><code>CACHE_SIZE</code></td><td><code>10g</code></td><td>podle disku</td></tr>
+  </tbody>
+</table></div>
+<p>Dál je potřeba publikovat porty 80/443 místo 127.0.0.1:8080/8443 a dodat skutečný certifikát do <code>certs/</code>. Alternativně nechat TLS na stávajícím balanceru a proxy vystavit jen na HTTP. Aplikace dostane <code>X-Forwarded-For</code> a <code>X-Forwarded-Proto</code>, takže pokud loguje IP klientů, musí těmto hlavičkám věřit. Cache se vyprázdní příkazem <code>docker compose exec proxy sh -c 'rm -rf /var/cache/nginx/img/*' &amp;&amp; docker compose restart proxy</code>.</p>
+
+<h2>Omezení a další kroky</h2>
+<ul>
+  <li><strong>Varianta podle Refereru:</strong> bez Refereru (přísné nastavení soukromí) dostane prohlížeč 2048 px, tedy větší, ale ostrý obrázek. <code>Vary: Referer</code> snižuje znovupoužití cache prohlížeče mezi různými stránkami.</li>
+  <li><strong>Kvalita q55 platí i pro detail a lightbox.</strong> Pokud bude na zoomu ztráta vidět, stačí zvýšit <code>IMGPROXY_FORMAT_QUALITY</code>. Například avif=65 znamená asi +40 % dat.</li>
+  <li><strong>Invalidace:</strong> názvy souborů obsahují časové razítko, takže nový upload má novou URL. Přepsání souboru pod stejnou cestou se projeví až po vyprázdnění cache (30 dní v proxy, 7 dní v prohlížeči).</li>
+  <li><strong>První návštěva nového díla</strong> čeká na stažení originálu. Na serveru v lokální síti to bude zlomek dnešních sekund. Cache jde předehřát průchodem výpisů.</li>
+  <li><strong>Systémově</strong> by aplikace měla i u sponzorovaných děl používat render URL. Proxy by pak řešila jen cache a formát, bez heuristiky podle Refereru.</li>
+</ul>
+</main>
+</body>
+</html>

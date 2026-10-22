@@ -1,0 +1,45 @@
+{
+  "date": "2026-10-21T20:39:57.539Z",
+  "rtt": 226,
+  "results": {
+    "bez proxy": {
+      "ttfb": 409,
+      "dcl": 2029,
+      "load": 14300,
+      "lcp": 4196,
+      "allImagesMs": 16624,
+      "requests": 81,
+      "totalBytes": 26134100,
+      "bytesAtLoad": 25112390,
+      "imageCount": 50,
+      "imageBytes": 25108658,
+      "largestImage": 6459745
+    },
+    "proxy, studená cache": {
+      "ttfb": 479,
+      "dcl": 1320,
+      "load": 2897,
+      "lcp": 1404,
+      "allImagesMs": 14954,
+      "requests": 71,
+      "totalBytes": 4751771,
+      "bytesAtLoad": 730935,
+      "imageCount": 50,
+      "imageBytes": 4123292,
+      "largestImage": 155992
+    },
+    "proxy, teplá cache": {
+      "ttfb": 228,
+      "dcl": 1417,
+      "load": 2041,
+      "lcp": 1924,
+      "allImagesMs": 3674,
+      "requests": 79,
+      "totalBytes": 4956505,
+      "bytesAtLoad": 2351691,
+      "imageCount": 50,
+      "imageBytes": 4122658,
+      "largestImage": 155973
+    }
+  }
+}
